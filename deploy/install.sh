@@ -16,7 +16,7 @@ REPO="https://github.com/freetoolhubhq/pvideo.git"
 APP_DIR="/opt/pvideo"
 
 echo "[pvideo] 1/7 system packages..."
-apt-get update -y -qq
+apt-get update -y -qq || true
 apt-get install -y -qq python3 python3-venv python3-pip ffmpeg espeak-ng \
   nginx git curl fonts-dejavu-core > /dev/null
 
@@ -42,7 +42,7 @@ if [ -n "$ENV_BAK" ]; then
   echo "[pvideo] kept existing credentials"
 else
   PVIDEO_USER="naiem"
-  PVIDEO_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
+  PVIDEO_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)" || true
   printf 'PVIDEO_PORT=5050\nPVIDEO_USER=%s\nPVIDEO_PASS=%s\n' \
     "$PVIDEO_USER" "$PVIDEO_PASS" > "$APP_DIR/.env"
 fi
@@ -70,7 +70,7 @@ PUBLIC_IP="$(curl -s --max-time 10 ifconfig.me 2>/dev/null || true)"
 CREDS_USER="$(grep '^PVIDEO_USER=' $APP_DIR/.env | cut -d= -f2)"
 CREDS_PASS="$(grep '^PVIDEO_PASS=' $APP_DIR/.env | cut -d= -f2)"
 
-sleep 2
+sleep 5
 if systemctl is-active -q pvideo && curl -s -o /dev/null -w "%{http_code}" \
     http://127.0.0.1:5050/health | grep -q 200; then
   STATUS="RUNNING ✓"
