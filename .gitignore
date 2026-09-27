@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+app/jobs/
+app/jobs.db
+app/*.db
+.DS_Store
+*.mp4
+!samples/*.mp4
+sample1.mp4

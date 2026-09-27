@@ -1,0 +1,5 @@
+flask>=3.0
+gunicorn>=22.0
+pillow>=10.0
+edge-tts>=6.1
+gtts>=2.5

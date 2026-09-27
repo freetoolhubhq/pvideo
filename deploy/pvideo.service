@@ -1,0 +1,19 @@
+[Unit]
+Description=PVideo — free video generator
+After=network.target
+
+[Service]
+Type=simple
+User=pvideo
+Group=pvideo
+WorkingDirectory=/opt/pvideo/app
+EnvironmentFile=/opt/pvideo/.env
+ExecStart=/opt/pvideo/venv/bin/gunicorn -w 1 --threads 4 --timeout 1900 \
+    --bind 127.0.0.1:5050 app:app
+Restart=on-failure
+RestartSec=5
+# Render jobs are CPU-heavy; keep the box responsive:
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
