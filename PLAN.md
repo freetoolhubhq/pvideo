@@ -27,7 +27,7 @@
 - Branding starts with "P" → **PVideo**
 
 ## Phases
-1. Engine: text -> voice -> captioned vertical MP4 — DONE 2026-09-27 (sample1.mp4, 1080x1920, verified)
+1. Engine: text -> video -> captioned vertical MP4 — DONE 2026-09-27 (sample1.mp4, 1080x1920, verified)
 2. Templates (news/facts/quotes) + Hindi/English voices
 3. Simple web UI: paste script -> download video — DONE 2026-09-27 (Flask app, tested end-to-end, PWA manifest+icons)
 4. VPS deploy (needs SSH access — awaited via email)
@@ -37,7 +37,11 @@
 - VPS: vps.sivonex.com (185.67.20.116), Ubuntu 24.04.3, 2vCPU/2GB/30GB — Cloudonfire/Virtualizor.
 - Panel login from automation is flaky (session bugs); user drives via mobile + Remote Desktop (VNC).
 - Deploy path: public GitHub repo `freetoolhubhq/pvideo` → one-command `install.sh`
-  (apt deps, pvideo user, venv, systemd, nginx :80, random Basic Auth creds,
+  (apt deps, pvideo user, venv, systemd, nginx, random Basic Auth creds,
   7-day MP4 cleanup). User pastes ONE curl|bash line into the VNC console as root.
-- No public DNS for vps.sivonex.com → plain HTTP + Basic Auth for v1 (HTTPS later via own domain/Cloudflare).
+- HTTPS-only since 2026-09-28: installer gets a free Let's Encrypt cert via
+  certbot --nginx for <ip-dashes>.nip.io (no DNS setup needed; PVIDEO_DOMAIN
+  env overrides with your own domain). Port 80 redirects to HTTPS. Install
+  FAILS CLOSED if no certificate can be issued — Basic Auth never goes over
+  plain HTTP.
 - Fixed 2026-09-27: `render_job` was swallowed by a comment line (auth edit) — worker would NameError every job.
