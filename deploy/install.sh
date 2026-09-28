@@ -65,12 +65,23 @@ systemctl daemon-reload
 systemctl enable -q --now pvideo
 
 echo "[pvideo] 7/8 HTTPS (nginx + free Let's Encrypt certificate)..."
-PUBLIC_IP="$(curl -s --max-time 10 ifconfig.me 2>/dev/null || true)"
-[ -z "$PUBLIC_IP" ] && PUBLIC_IP="$(hostname -I | awk '{print $1}')"
-# nip.io gives this VPS a public hostname for free — no DNS setup needed.
-NIP_DOMAIN="$(printf '%s' "$PUBLIC_IP" | tr '.' '-').nip.io"
-DOMAIN="${PVIDEO_DOMAIN:-$NIP_DOMAIN}"
+if [ -n "${PVIDEO_DOMAIN:-}" ]; then
+  DOMAIN="$PVIDEO_DOMAIN"
+else
+  # nip.io needs the public IPv4 address — force IPv4 (this VPS also has IPv6,
+  # which curl would otherwise prefer and certbot cannot use here).
+  PUBLIC_IP="$(curl -4s --max-time 10 ifconfig.me 2>/dev/null || true)"
+  [ -z "$PUBLIC_IP" ] && PUBLIC_IP="$(hostname -I | tr ' ' '\n' | grep -m1 -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || true)"
+  if ! printf '%s' "$PUBLIC_IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+    echo "[pvideo] ERROR: could not detect the VPS public IPv4 address (got: '$PUBLIC_IP')." >&2
+    echo "[pvideo] Set PVIDEO_DOMAIN to your own domain and re-run the installer." >&2
+    exit 1
+  fi
+  # nip.io gives this VPS a public hostname for free — no DNS setup needed.
+  DOMAIN="$(printf '%s' "$PUBLIC_IP" | tr '.' '-').nip.io"
+fi
 echo "[pvideo] certificate domain: $DOMAIN"
+
 
 sed "s/PVIDEO_DOMAIN_PLACEHOLDER/$DOMAIN/" \
   "$APP_DIR/deploy/nginx-pvideo.conf" > /etc/nginx/sites-available/pvideo
