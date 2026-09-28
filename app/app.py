@@ -8,9 +8,9 @@ Deps: flask, pillow (engine needs edge-tts/gtts + ffmpeg too)
 
 Lean by design for a 2GB VPS: one render job at a time, SQLite queue,
 in-memory per-IP rate limit. Set PVIDEO_USER + PVIDEO_PASS env vars to
-require HTTP Basic Auth before exposing publicly (no auth if unset).
+require login (session cookie via the /login form) before exposing
+publicly (no auth if unset).
 """
-import base64
 import os
 import re
 import sqlite3
@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from functools import wraps
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_file, send_from_directory, session, url_for
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 JOBS_DIR = os.path.join(BASE, "jobs")
@@ -43,33 +43,73 @@ _rate_lock = threading.Lock()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
 
-# ---------- basic auth (set PVIDEO_USER + PVIDEO_PASS to enable) ----------
+# ---------- session auth (PVIDEO_USER + PVIDEO_PASS; login form at /login) ----------
 AUTH_USER = os.environ.get("PVIDEO_USER", "")
 AUTH_PASS = os.environ.get("PVIDEO_PASS", "")
 
+app.secret_key = os.environ.get("PVIDEO_SECRET", "") or os.urandom(32)
 
-def _auth_ok():
+
+def _is_authed():
     if not (AUTH_USER and AUTH_PASS):
         return True  # not configured -> open (local dev only)
-    auth = request.headers.get("Authorization", "")
-    try:
-        scheme, b64 = auth.split(" ", 1)
-        if scheme.lower() != "basic":
-            return False
-        user, _, pw = base64.b64decode(b64).decode("utf-8", "ignore").partition(":")
-        return bool(user) and user == AUTH_USER and pw == AUTH_PASS
-    except Exception:
-        return False
+    return session.get("authed") is True
 
 
 def require_auth(f):
     @wraps(f)
     def wrapper(*a, **kw):
-        if not _auth_ok():
-            return (jsonify({"ok": False, "error": "auth required"}), 401,
-                    {"WWW-Authenticate": 'Basic realm="PVideo"'})
-        return f(*a, **kw)
+        if _is_authed():
+            return f(*a, **kw)
+        # API calls get JSON 401; page loads go to the login form
+        if request.path.startswith("/api/") or request.path.startswith("/download/"):
+            return jsonify({"ok": False, "error": "auth required"}), 401
+        return redirect(url_for("login", next=request.path))
     return wrapper
+
+
+LOGIN_PAGE = """<!doctype html><html lang="hi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PVideo Login</title>
+<style>body{{font-family:system-ui;background:#111;color:#eee;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
+.card{{background:#1c1c1c;padding:28px;border-radius:14px;width:88%;max-width:340px;box-shadow:0 4px 24px #000}}
+h1{{margin:0 0 4px;font-size:22px}}.sub{{color:#999;font-size:13px;margin-bottom:18px}}
+input{{width:100%;box-sizing:border-box;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #444;background:#222;color:#fff;font-size:16px}}
+button{{width:100%;padding:12px;margin-top:10px;border:0;border-radius:8px;background:#e91e63;color:#fff;font-size:17px;font-weight:700}}
+.err{{color:#ff8080;font-size:14px;margin:6px 0;min-height:20px}}</style></head>
+<body><div class="card"><h1>PVideo</h1><div class="sub">Login karo</div>
+<div class="err">{err}</div>
+<form method="post"><input name="username" placeholder="Username" autocomplete="username" required>
+<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+<input type="hidden" name="next" value="{nxt}">
+<button type="submit">Login</button></form></div></body></html>"""
+
+
+@app.get("/login")
+def login():
+    if _is_authed():
+        return redirect(request.args.get("next") or "/")
+    return LOGIN_PAGE.format(err="", nxt=request.args.get("next", "/"))
+
+
+@app.post("/login")
+def login_post():
+    nxt = request.form.get("next") or "/"
+    if not nxt.startswith("/"):
+        nxt = "/"
+    user = request.form.get("username", "")
+    pw = request.form.get("password", "")
+    if AUTH_USER and user == AUTH_USER and pw == AUTH_PASS:
+        session["authed"] = True
+        session.permanent = True
+        return redirect(nxt)
+    return LOGIN_PAGE.format(err="Galat username ya password.", nxt=nxt), 401
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 
 
 # ---------- db ----------
