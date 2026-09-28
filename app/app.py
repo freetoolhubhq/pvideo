@@ -28,7 +28,7 @@ from flask import Flask, jsonify, redirect, request, send_file, send_from_direct
 BASE = os.path.dirname(os.path.abspath(__file__))
 JOBS_DIR = os.path.join(BASE, "jobs")
 DB_PATH = os.path.join(BASE, "jobs.db")
-ENGINE = os.path.join(BASE, "..", "engine", "make_video.py")
+ENGINE = os.path.join(BASE, "..", "engine", "cartoon.py")
 
 PORT = int(os.environ.get("PVIDEO_PORT", "5050"))
 
