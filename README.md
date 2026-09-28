@@ -13,8 +13,9 @@ fallback) → captioned 9:16 MP4 (H.264/AAC, WhatsApp + YouTube Shorts ready).
 curl -sSL https://raw.githubusercontent.com/freetoolhubhq/pvideo/main/deploy/install.sh | bash
 ```
 
-Installs Python env, ffmpeg, espeak-ng, nginx + systemd service, and prints
-your login + URL. Then open `http://YOUR_SERVER_IP` on your phone.
+Installs Python env, ffmpeg, espeak-ng, nginx + systemd service, gets a free
+Let's Encrypt HTTPS certificate, and prints your login + secure URL.
+Then open the `https://...` URL it prints on your phone.
 
 ## Local dev
 
