@@ -43,7 +43,11 @@ ESPEAK_VOICES = {"hi": "hi", "en": "en"}
 # ---------------------------------------------------------------- fonts
 def find_font():
     """Bold font that covers Devanagari + Latin (for Hindi/English captions)."""
-    cands = []
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    # Bundled engine font FIRST — guaranteed Devanagari coverage.
+    # (fc-match silently falls back to a Latin-only font like DejaVu when
+    # Noto Sans Devanagari is not installed, which renders Hindi as tofu.)
+    cands = sorted(glob.glob(os.path.join(here, "*.ttf")))
     try:
         r = subprocess.run(
             ["fc-match", "Noto Sans Devanagari:weight=bold", "--format", "%{file}"],
@@ -53,8 +57,6 @@ def find_font():
             cands.append(p)
     except Exception:
         pass
-    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-    cands += sorted(glob.glob(os.path.join(here, "*.ttf")))
     cands += ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
     for c in cands:
         if os.path.exists(c):
@@ -85,30 +87,6 @@ _EMOJI_RE = re.compile(
 
 def strip_emoji(text):
     """Remove emoji/symbols (no color-emoji font on server); TTS text untouched."""
-    return _EMOJI_RE.sub("", text).strip()
-
-
-def split_scenes(text, max_chars=90):
-    """Split on sentence enders (incl. Devanagari danda), merge to <=max_chars."""
-    parts = re.split(r"(?<=[\u0964.!?\n])\s*", text.strip())
-    parts = [p.strip() for p in parts if p.strip()]
-    scenes, cur = [], ""
-    for p in parts:
-        if len(cur) + 1 + len(p) <= max_chars:
-            cur = (cur + " " + p).strip()
-        else:
-            if cur:
-                scenes.append(cur)
-            while len(p) > max_chars:
-                cut = p.rfind(" ", 0, max_chars)
-                cut = cut if cut > 0 else max_chars
-                scenes.append(p[:cut].strip())
-                p = p[cut:].strip()
-            cur = p
-    if cur:
-        scenes.append(cur)
-    return scenes
-
 
 def scene_durations(scenes, total):
     """Distribute total audio seconds across scenes, proportional to characters.
@@ -275,79 +253,87 @@ def make_card(scene_text, idx, n_scenes, title, font_path, latin_font_path):
 
 
 # ---------------------------------------------------------------- ffmpeg
-def render_segment(png, dur, seg_mp4):
-    frames = max(int(round(dur * FPS)), FPS)
-    vf = ("scale=2160:3840,"
-          "zoompan=z='min(1+0.00012*on,1.10)':d={d}:"
-          "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
-          ).format(d=frames)
-    subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-i", png, "-vf", vf,
-         "-frames:v", str(frames), "-r", str(FPS),
-         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-         seg_mp4], check=True)
+def render_segment(img, dur, out_mp4, zoom="in"):
+    tmp = out_mp4 + ".png"
+    img.save(tmp)
+    frames = max(1, int(dur * FPS))
+    z0, z1 = (1.00, 1.10) if zoom == "in" else (1.10, 1.00)
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-loop", "1", "-i", tmp,
+        "-vf", (f"scale=2160:-2,zoompan=z='min(zoom+{((z1 - z0) / frames):.5f},1.5)'"
+                 f":d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={FPS}",),
+        "-frames:v", str(frames), "-r", str(FPS),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "veryfast", "-crf", "20", out_mp4], check=True)
+    os.remove(tmp)
 
 
-def concat_mux(seg_files, voice_mp3, out_mp4, tmp):
-    lst = os.path.join(tmp, "list.txt")
+def concat_mux(seg_paths, audio_mp3, out_path):
+    lst = os.path.join(tempfile.gettempdir(), "pvideo_concat.txt")
     with open(lst, "w") as f:
-        for s in seg_files:
+        for s in seg_paths:
             f.write(f"file '{s}'\n")
-    silent = os.path.join(tmp, "video_nosound.mp4")
-    subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
-         "-i", lst, "-c", "copy", silent], check=True)
-    subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-i", silent, "-i", voice_mp3,
-         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-         "-shortest", "-movflags", "+faststart", out_mp4], check=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+        "-i", lst, "-i", audio_mp3,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
+        "-crf", "20", "-r", str(FPS),
+        "-c:a", "aac", "-b:a", "128k", "-shortest",
+        "-movflags", "+faststart", out_path], check=True)
 
 
 # ---------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(description="PVideo v1 — free text-to-video")
-    ap.add_argument("--text", required=True, help="Script (Hindi and/or English)")
-    ap.add_argument("--lang", default="hi", choices=["hi", "en"])
-    ap.add_argument("--out", required=True, help="Output MP4 path")
-    ap.add_argument("--title", default="", help="Title shown on first scene")
-    ap.add_argument("--tts", default=None, choices=["edge-tts", "gtts", "espeak"],
-                    help="Force a TTS provider (default: auto chain)")
-    ap.add_argument("--keep-temp", action="store_true")
+    ap = argparse.ArgumentParser(description="PVideo v1: script -> vertical MP4")
+    ap.add_argument("script", help="path to .txt script (UTF-8)")
+    ap.add_argument("-o", "--out", default="output.mp4", help="output MP4 path")
+    ap.add_argument("-l", "--lang", default="hi", choices=["hi", "en"])
+    ap.add_argument("--title", default="", help="optional title on first card")
+    ap.add_argument("--prefer-tts", default=None,
+                    choices=["edge-tts", "gtts", "espeak"])
+    ap.add_argument("--skip-video", action="store_true",
+                    help="only produce voiceover MP3 (debug)")
     a = ap.parse_args()
 
+    for bin in ("ffmpeg", "ffprobe"):
+        if not shutil.which(bin):
+            sys.exit(f"error: {bin} not found in PATH")
+
+    with open(a.script, encoding="utf-8") as f:
+        text = f.read().strip()
+    if not text:
+        sys.exit("error: script is empty")
+
+    font = find_font()
+    latin_font = find_latin_font()
+    print(f"[pvideo] fonts: {font} / {latin_font}")
+
+    scenes = split_scenes(text)
+    print(f"[pvideo] {len(scenes)} scenes")
+
     tmp = tempfile.mkdtemp(prefix="pvideo_")
-    try:
-        scenes = split_scenes(a.text)
-        if not scenes:
-            sys.exit("No scenes: empty text")
-        print(f"[pvideo] scenes: {len(scenes)}", flush=True)
+    audio = os.path.join(tmp, "voice.mp3")
+    provider = make_voiceover(text, a.lang, audio, prefer=a.prefer_tts)
+    total = media_duration(audio)
+    print(f"[pvideo] TTS via {provider}: {total:.1f}s")
+    if a.skip_video:
+        shutil.copy(audio, a.out + ".mp3")
+        print(f"[pvideo] wrote {a.out}.mp3")
+        return
 
-        voice = os.path.join(tmp, "voice.mp3")
-        provider = make_voiceover(a.text, a.lang, voice, prefer=a.tts)
-        total = media_duration(voice)
-        print(f"[pvideo] TTS provider: {provider}, audio: {total:.1f}s", flush=True)
-
-        durs = scene_durations(scenes, total)
-        font = find_font()
-        latin_font = find_latin_font()
-        print(f"[pvideo] font: {os.path.basename(font)}", flush=True)
-
-        segs = []
-        for i, (s, d) in enumerate(zip(scenes, durs)):
-            png = os.path.join(tmp, f"scene{i}.png")
-            make_card(s, i, len(scenes), a.title, font, latin_font).save(png)
-            seg = os.path.join(tmp, f"seg{i}.mp4")
-            render_segment(png, d, seg)
-            segs.append(seg)
-            print(f"[pvideo] scene {i + 1}/{len(scenes)} ({d:.1f}s)", flush=True)
-
-        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-        concat_mux(segs, voice, a.out, tmp)
-        print(f"[pvideo] DONE -> {a.out}")
-    finally:
-        if not a.keep_temp:
-            shutil.rmtree(tmp, ignore_errors=True)
+    durs = scene_durations(scenes, total)
+    segs = []
+    for i, (sc, d) in enumerate(zip(scenes, durs)):
+        img = make_card(sc, i, len(scenes), a.title, font, latin_font)
+        seg = os.path.join(tmp, f"seg{i:03d}.mp4")
+        render_segment(img, d, seg, zoom="in" if i % 2 == 0 else "out")
+        segs.append(seg)
+        print(f"[pvideo] scene {i + 1}/{len(scenes)} ({d:.1f}s)")
+    concat_mux(segs, audio, a.out)
+    print(f"[pvideo] wrote {a.out}")
 
 
 if __name__ == "__main__":
     main()
+
+    
