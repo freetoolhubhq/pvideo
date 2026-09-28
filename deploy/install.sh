@@ -79,7 +79,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t -q && systemctl reload nginx
 
 if ! certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
-     --register-unsafely-without-email --redirect --keep-until-expiry -q; then
+     --register-unsafely-without-email --redirect --keep-until-expiring -q; then
   cat >&2 <<EOF
 
 [pvideo] ERROR: could not get an HTTPS certificate for $DOMAIN.
